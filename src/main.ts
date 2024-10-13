@@ -30,6 +30,17 @@ const onScreenResize = () => {
   updateQuadSize();
 }
 
+function cleanUpResources() {
+  screenTex.dispose();
+  tmpTex1.dispose();
+  for (var texture of videoTextures) texture.dispose();
+  console.log("disposing");
+  e.dispose();
+}
+
+window.addEventListener('beforeunload', cleanUpResources);
+
+
 const { scene, camera } = createScene();
 
 const screenQuad = BABYLON.MeshBuilder.CreatePlane("screenQuad", { size: 1 }, scene);
@@ -38,6 +49,7 @@ let screenWidth = e.getRenderWidth();
 let screenHeight = e.getRenderHeight();
 let screenTex = BABYLON.RawTexture.CreateRGBAStorageTexture(null, screenWidth, screenHeight, e);
 let tmpTex1 = BABYLON.RawTexture.CreateRGBAStorageTexture(null, screenWidth, screenHeight, e);
+let tmpTex2 = BABYLON.RawTexture.CreateRGBAStorageTexture(null, screenWidth, screenHeight, e);
 
 screenMat.emissiveTexture = screenTex;
 screenMat.alpha = 1.0;
@@ -53,13 +65,14 @@ let workgroupsY = Math.ceil(screenHeight / textureWorkgroupSize);
 
 const videoTextures = await GetTextureArrayFromVideo("asd.mp4", e);
 
+// shader graph
 shaders.clearCompShader.setStorageTexture("texture", screenTex);
-
 shaders.displayImageShader.setTexture("src", videoTextures[0], false);
 shaders.displayImageShader.setStorageTexture("dest", tmpTex1);
-
-shaders.sobelShader.setTexture("src", tmpTex1, false);
-shaders.sobelShader.setStorageTexture("dest", screenTex);
+shaders.gaussianBlurXShader.setTexture("src", tmpTex1, false);
+shaders.gaussianBlurXShader.setStorageTexture("dest", tmpTex2);
+shaders.gaussianBlurYShader.setTexture("src", tmpTex2, false);
+shaders.gaussianBlurYShader.setStorageTexture("dest", screenTex);
 
 let i = 0;
 e.runRenderLoop(function () {
@@ -74,7 +87,9 @@ e.runRenderLoop(function () {
   shaders.displayImageShader.dispatchWhenReady(workgroupsX, workgroupsY, 1);
   i = (i + 1) % videoTextures.length;
   
-  shaders.sobelShader.dispatchWhenReady(workgroupsX, workgroupsY, 1);
+  //shaders.sobelShader.dispatchWhenReady(workgroupsX, workgroupsY, 1);
+  shaders.gaussianBlurXShader.dispatchWhenReady(workgroupsX, workgroupsY, 1);
+  shaders.gaussianBlurYShader.dispatchWhenReady(workgroupsX, workgroupsY, 1);
   scene.render();
 });
 
