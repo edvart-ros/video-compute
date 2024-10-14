@@ -1,20 +1,13 @@
 import * as BABYLON from '@babylonjs/core'
 import { GetTextureArrayFromVideo } from './lib';
 import { Shaders } from './shaders';
+import { TileShader } from './shaders/Tile';
+import { createScene, createScreenQuad } from './scene_setup';
+import { GaussianBlur as GaussianBlurShader } from './shaders/gaussian_blur';
+import { DisplayImageShader as CopyShader } from './shaders/display_image';
+import { SobelShader } from './shaders/sobel';
 
-const canvas = document.getElementById("renderCanvas");
-const e = new BABYLON.WebGPUEngine(canvas as HTMLCanvasElement);
-await e.initAsync();
-
-const createScene = function () {
-  const scene = new BABYLON.Scene(e);
-  const camera = new BABYLON.FreeCamera("camera1", new BABYLON.Vector3(0, 0, -10), scene);
-  camera.minZ = 0.8;
-  camera.attachControl(canvas, true);
-  return { scene: scene, camera: camera };
-};
-
-const updateQuadSize = () => {
+function updateQuadSize() {
   const aspectRatio = screenWidth / screenHeight;
   const height = 2 * Math.tan(camera.fov / 2);
   const width = height * aspectRatio;
@@ -25,54 +18,58 @@ const updateQuadSize = () => {
 const onScreenResize = () => {
   screenWidth = e.getRenderWidth();
   screenHeight = e.getRenderHeight();
-  screenTex = BABYLON.RawTexture.CreateRGBAStorageTexture(null, screenWidth, screenHeight, e, false);
-  screenMat.emissiveTexture = screenTex;
   updateQuadSize();
 }
 
 function cleanUpResources() {
   screenTex.dispose();
   tmpTex1.dispose();
+  tmpTex2.dispose();
   for (var texture of videoTextures) texture.dispose();
   console.log("disposing");
   e.dispose();
 }
 
-window.addEventListener('beforeunload', cleanUpResources);
-
-
-const { scene, camera } = createScene();
-
-const screenQuad = BABYLON.MeshBuilder.CreatePlane("screenQuad", { size: 1 }, scene);
-const screenMat = new BABYLON.StandardMaterial("screenMat", scene);
+const canvas = document.getElementById("renderCanvas");
+const e = new BABYLON.WebGPUEngine(canvas as HTMLCanvasElement);
+await e.initAsync();
 let screenWidth = e.getRenderWidth();
 let screenHeight = e.getRenderHeight();
+
+
+window.addEventListener('beforeunload', cleanUpResources);
+
+const { scene, camera } = createScene(e, canvas as HTMLCanvasElement);
+const {screenQuad, screenMat} = createScreenQuad(camera, scene)
+const videoTextures = await GetTextureArrayFromVideo("asd.mp4", e);
+
 let screenTex = BABYLON.RawTexture.CreateRGBAStorageTexture(null, screenWidth, screenHeight, e);
 let tmpTex1 = BABYLON.RawTexture.CreateRGBAStorageTexture(null, screenWidth, screenHeight, e);
 let tmpTex2 = BABYLON.RawTexture.CreateRGBAStorageTexture(null, screenWidth, screenHeight, e);
+let tmpTex3 = BABYLON.RawTexture.CreateRGBAStorageTexture(null, screenWidth, screenHeight, e);
+let tmpTex4 = BABYLON.RawTexture.CreateRGBAStorageTexture(null, screenWidth, screenHeight, e);
 
-screenMat.emissiveTexture = screenTex;
-screenMat.alpha = 1.0;
-screenQuad.material = screenMat;
-screenQuad.position = new BABYLON.Vector3(0, 0, 1);
-screenQuad.parent = camera;
 
+// shader graph
 const shaders = new Shaders(e);
-
 const textureWorkgroupSize = 16;
 let workgroupsX = Math.ceil(screenWidth / textureWorkgroupSize);
 let workgroupsY = Math.ceil(screenHeight / textureWorkgroupSize);
 
-const videoTextures = await GetTextureArrayFromVideo("asd.mp4", e);
-
-// shader graph
 shaders.clearCompShader.setStorageTexture("texture", screenTex);
-shaders.displayImageShader.setTexture("src", videoTextures[0], false);
-shaders.displayImageShader.setStorageTexture("dest", tmpTex1);
-shaders.gaussianBlurXShader.setTexture("src", tmpTex1, false);
-shaders.gaussianBlurXShader.setStorageTexture("dest", tmpTex2);
-shaders.gaussianBlurYShader.setTexture("src", tmpTex2, false);
-shaders.gaussianBlurYShader.setStorageTexture("dest", screenTex);
+
+const copy = new CopyShader(e, "displayImage");
+const gaussianBlur = new GaussianBlurShader(e, "gaussianBlur");
+const sobel = new SobelShader(e, "sobelShader");
+const tile = new TileShader(e, "tileShader");
+
+copy.setTextures(videoTextures[0], tmpTex1);
+gaussianBlur.setTextures(tmpTex1, tmpTex2, tmpTex3);
+sobel.setTextures(tmpTex3, tmpTex4);
+tile.setTileTextures(tmpTex1, tmpTex2, tmpTex3, tmpTex4);
+tile.setDestTexture(screenTex);
+screenMat.emissiveTexture = screenTex;
+
 
 let i = 0;
 e.runRenderLoop(function () {
@@ -83,13 +80,13 @@ e.runRenderLoop(function () {
 
   shaders.clearCompShader.dispatchWhenReady(workgroupsX, workgroupsY, 1);
 
-  shaders.displayImageShader.setTexture("src", videoTextures[i], false);
-  shaders.displayImageShader.dispatchWhenReady(workgroupsX, workgroupsY, 1);
-  i = (i + 1) % videoTextures.length;
   
-  //shaders.sobelShader.dispatchWhenReady(workgroupsX, workgroupsY, 1);
-  shaders.gaussianBlurXShader.dispatchWhenReady(workgroupsX, workgroupsY, 1);
-  shaders.gaussianBlurYShader.dispatchWhenReady(workgroupsX, workgroupsY, 1);
+  copy.setTextures(videoTextures[i]);
+  copy.go(workgroupsX, workgroupsY, 1);
+  gaussianBlur.go(workgroupsX, workgroupsY, 1);
+  tile.go(workgroupsX, workgroupsY, 1);
+  sobel.go(workgroupsX, workgroupsY, 1);
   scene.render();
+  i = (i + 1) % videoTextures.length;
 });
 
