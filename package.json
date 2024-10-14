@@ -11,6 +11,8 @@
   "devDependencies": {
     "@babylonjs/core": "^7.29.0",
     "@babylonjs/inspector": "^7.29.0",
+    "@types/dat.gui": "^0.7.13",
+    "dat.gui": "^0.7.9",
     "typescript": "^5.5.3",
     "vite": "^5.4.8"
   },
